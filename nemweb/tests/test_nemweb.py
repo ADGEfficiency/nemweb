@@ -1,41 +1,54 @@
 """ check that we download data the same as a saved pkl """
 
 import os
-import pkg_resources
 import sqlite3
+import datetime
+import pytest
 
 from nemweb import CONFIG
-from nemweb.nemweb_current import CurrentFileHandler, DATASETS, update_datasets
+from nemweb.nemweb_current import CurrentFileHandler, DATASETS
 
-from nemweb.utils import load_pickle
+from nemweb.utils import local_to_nem_tz
 
+DB_PATH = os.path.join(
+    CONFIG['local_settings']['sqlite_dir'], 'test.db')
 
-def test_nemweb():
-    db_path = os.path.join(
-        CONFIG['local_settings']['sqlite_dir'], 'test.db'
-    )
-
-    if os.path.exists(db_path):
-        os.remove(db_path)
+#setup = perhaps this could be turned into a fixture?
+def nemweb_current():
+    """Function to download most recent 'trading_is' and create a test db"""
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
         print('removed previous test database')
 
     handler = CurrentFileHandler()
 
+    #test latest previous trading_interval
+    local_datetime = datetime.datetime.now()
+    nemtime = local_to_nem_tz(local_datetime)
+    start_datetime = nemtime - datetime.timedelta(0, 1800)
+
     handler.update_data(
-        DATASETS['trading_is'], start_date='20180921', end_date='20180922',
-        print_progress=True, db_name='test.db'
+        DATASETS['trading_is'],
+        print_progress=True,
+        db_name='test.db',
+        start_date=start_datetime
     )
 
-    conn = sqlite3.connect(db_path)
+nemweb_current()
+
+def test_table_creation():
+    """Checks table created with the correct tables"""
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    test_data = cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    assert test_data == [('TRADING_PRICE',), ('TRADING_REGIONSUM',), ('TRADING_INTERCONNECTORRES',)]
 
-    test_data = cur.execute("SELECT RRP FROM TRADING_PRICE").fetchall()
 
-
-    test_data_check = pkg_resources.resource_filename(
-        'nemweb', 'tests/2018_09_21.pkl'
-    )
-
-    test_data_check = load_pickle(test_data_check)
-
-    assert test_data == test_data_check
+@pytest.mark.parametrize("table, count", [['TRADING_PRICE', 5],
+                                          ['TRADING_REGIONSUM', 5],
+                                          ['TRADING_INTERCONNECTORRES', 6]])
+def test_data_count(table, count):
+    """checks keys data in tables (and lenth data matches expected data in trading interval)"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    assert cur.execute("SELECT count(*) FROM '{0}'".format(table)).fetchall()[0][0] == count
